@@ -1,26 +1,28 @@
-use std::{collections::{HashMap, VecDeque}, error::Error, path::PathBuf};
+use std::{collections::{HashMap, VecDeque}, env, error::Error, path::PathBuf, process::exit};
 
 use clap::{Args, Parser};
 use log::{debug, error, info, warn, LevelFilter};
 use reqwest::{Client, StatusCode};
 use tokio::{fs::read_to_string, io::{stdin, AsyncReadExt}, time::{sleep, Duration}};
 
+const API_ACCESS_KEY: &str = "API_ACCESS_KEY";
+const API_SECRET_KEY: &str = "API_SECRET_KEY";
 const API_URL: &str = "https://web.archive.org/save";
 const API_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 const TIMEOUT_DURATION: Duration = Duration::from_secs(60);
 
 #[derive(Parser)]
-#[command(author, version, about, long_about = None, arg_required_else_help = true)]
+#[command(author, version, about, long_about = None, arg_required_else_help = false)]
 #[command(propagate_version = true)]
 pub struct Arguments {
-    access_key: String,
-
-    secret_key: String,
-
-    input_file: Option<PathBuf>,
+    #[command(flatten)]
+    pub verbosity: Verbosity,
 
     #[command(flatten)]
-    pub verbosity: Verbosity
+    pub credentials: Credentials,
+
+    /// A path to a file on the filesystem containing URLs
+    input_file: Option<PathBuf>
 }
 
 #[derive(Args)]
@@ -34,6 +36,16 @@ pub struct Verbosity {
 
     #[arg(short = 'q', long = "quiet", help = "Suppress informational messages", global = true)]
     pub quiet: bool
+}
+
+#[derive(Args)]
+#[group()]
+pub struct Credentials {
+    #[arg(short = 'A', long = "access-key", help = "The access key to use for authentication")]
+    access_key: Option<String>,
+
+    #[arg(short = 'S', long = "secret-key", help = "The secret key to use for authentication")]
+    secret_key: Option<String>,
 }
 
 impl Verbosity {
@@ -157,7 +169,26 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     let urls = read_urls(arguments.input_file).await?;
 
-    submit_urls(&client, &urls, &arguments.access_key, &arguments.secret_key).await?;
+    if urls.is_empty() {
+        error!("Nothing to do; quitting");
+
+        exit(1);
+    }
+
+    if dotenv::dotenv().ok() == None {
+        debug!("Failed to load credentials from dotfile");
+    }
+
+    let access_key = arguments.credentials.access_key.or(env::var(API_ACCESS_KEY).ok());
+    let secret_key = arguments.credentials.secret_key.or(env::var(API_SECRET_KEY).ok());
+
+    if access_key.is_none() || secret_key.is_none() {
+        error!("Must provide an access key and secret key");
+
+        exit(1);
+    }
+
+    submit_urls(&client, &urls, &access_key.unwrap(), &secret_key.unwrap()).await?;
 
     Ok(())
 }
