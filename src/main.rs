@@ -1,7 +1,7 @@
 use std::{collections::{HashMap, VecDeque}, error::Error, path::PathBuf};
 
 use clap::{Args, Parser};
-use log::{debug, info, warn, LevelFilter};
+use log::{debug, error, info, warn, LevelFilter};
 use reqwest::{Client, StatusCode};
 use tokio::{fs::read_to_string, io::{stdin, AsyncReadExt}, time::{sleep, Duration}};
 
@@ -70,7 +70,7 @@ async fn read_urls(path: Option<PathBuf>) -> Result<Vec<String>, Box<dyn Error +
     }
 }
 
-async fn submit_url(client: &Client, url: &str, access_key: &str, secret_key: &str) -> Result<StatusCode, Box<dyn Error + Send + Sync>> {
+async fn submit_url(client: &Client, url: &str, access_key: &str, secret_key: &str) -> Result<(StatusCode, HashMap<String, String>), Box<dyn Error + Send + Sync>> {
     let mut form = HashMap::new();
 
     form.insert("url", url);
@@ -86,9 +86,7 @@ async fn submit_url(client: &Client, url: &str, access_key: &str, secret_key: &s
     let status = response.status();
     let json = response.json::<HashMap<String, String>>().await?;
 
-    debug!("\n{json:#?}");
-
-    Ok(status)
+    Ok((status, json))
 }
 
 fn setup_logging(verbosity: &Verbosity) {
@@ -110,15 +108,22 @@ async fn submit_urls(client: &Client, urls: &[String], access_key: &str, secret_
     let mut index: usize = 1;
 
     while let Some(url) = queue.pop_front() {
-        match submit_url(client, url, access_key, secret_key).await? {
-            status @ StatusCode::OK => {
+        let (status, response) = submit_url(client, url, access_key, secret_key).await?;
+
+        debug!("\n{response:#?}");
+
+        match status {
+            StatusCode::OK => {
                 info!("{index}/{count}: {status} -> {url}");
+
+                if let Some(message) = response.get("message") { info!("{message}"); }
 
                 index += 1;
             }
-            status @ StatusCode::TOO_MANY_REQUESTS => {
-                info!("{index}/{count}: {status} -> {url}");
-                warn!("Rate limit hit; waiting...");
+            StatusCode::TOO_MANY_REQUESTS => {
+                warn!("{index}/{count}: {status} -> {url}");
+
+                if let Some(message) = response.get("message") { warn!("{message}"); }
 
                 // Wait for a minute.
                 sleep(TIMEOUT_DURATION).await;
@@ -126,9 +131,10 @@ async fn submit_urls(client: &Client, urls: &[String], access_key: &str, secret_
                 // Put this URL back into the queue.
                 queue.push_back(url);
             }
-            status @ _ => {
-                info!("{index}/{count}: {status} -> {url}");
-                warn!("Skipping");
+            _ => {
+                error!("{index}/{count}: {status} -> {url}");
+
+                if let Some(message) = response.get("message") { error!("{message}"); }
 
                 index += 1;
             }
