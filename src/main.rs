@@ -125,7 +125,7 @@ async fn submit_urls(client: &Client, urls: &[String], access_key: &str, secret_
 
                 if let Some(message) = response.get("message") { warn!("{message}"); }
 
-                // Wait for a minute.
+                // Wait for a set period of time.
                 sleep(TIMEOUT_DURATION).await;
 
                 // Put this URL back into the queue.
