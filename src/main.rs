@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, VecDeque}, error::Error, path::PathBuf};
 
-use clap::Parser;
+use clap::{Args, Parser};
 use log::{debug, info, warn, LevelFilter};
 use reqwest::{Client, StatusCode};
 use tokio::{fs::read_to_string, io::{stdin, AsyncReadExt}, time::{sleep, Duration}};
@@ -12,12 +12,37 @@ const TIMEOUT_DURATION: Duration = Duration::from_secs(60);
 #[derive(Parser)]
 #[command(author, version, about, long_about = None, arg_required_else_help = true)]
 #[command(propagate_version = true)]
-struct Arguments {
+pub struct Arguments {
     access_key: String,
 
     secret_key: String,
 
-    input_file: Option<PathBuf>
+    input_file: Option<PathBuf>,
+
+    #[command(flatten)]
+    pub verbosity: Verbosity
+}
+
+#[derive(Args)]
+#[group(multiple = false)]
+pub struct Verbosity {
+    #[arg(short = 'd', long = "debug", help = "Enable debugging output", global = true)]
+    pub debug: bool,
+
+    #[arg(short = 'v', long = "verbose", help = "Enable verbose output", global = true)]
+    pub verbose: bool,
+
+    #[arg(short = 'q', long = "quiet", help = "Suppress informational messages", global = true)]
+    pub quiet: bool
+}
+
+impl Verbosity {
+    pub fn to_filter(&self) -> LevelFilter {
+        if self.debug { LevelFilter::Trace }
+        else if self.verbose { LevelFilter::Debug }
+        else if self.quiet { LevelFilter::Warn }
+        else { LevelFilter::Info }
+    }
 }
 
 async fn read_urls(path: Option<PathBuf>) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
@@ -66,9 +91,11 @@ async fn submit_url(client: &Client, url: &str, access_key: &str, secret_key: &s
     Ok(status)
 }
 
-fn setup_logging() {
+fn setup_logging(verbosity: &Verbosity) {
+    let filter = verbosity.to_filter();
+
     env_logger::builder()
-        .filter_level(LevelFilter::Info)
+        .filter_level(filter)
         .format_level(true)
         .format_target(false)
         .format_module_path(false)
@@ -113,9 +140,9 @@ async fn submit_urls(client: &Client, urls: &[String], access_key: &str, secret_
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    setup_logging();
-
     let arguments = Arguments::parse();
+
+    setup_logging(&arguments.verbosity);
 
     let client = reqwest::Client::builder()
         .connection_verbose(true)
