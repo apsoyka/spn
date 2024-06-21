@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, VecDeque}, error::Error};
+use std::collections::{HashMap, VecDeque};
 
 use log::{debug, error, info, warn};
 use reqwest::{Client, StatusCode};
@@ -7,10 +7,11 @@ use tokio::time::{sleep, Duration};
 const API_URL: &str = "https://web.archive.org/save";
 const TIMEOUT_DURATION: Duration = Duration::from_secs(60);
 
-type RequestResult = Result<(StatusCode, HashMap<String, String>), Box<dyn Error + Send + Sync>>;
-type SubmitResult = Result<(), Box<dyn Error + Send + Sync>>;
+type BoxedError<'a> = Box<dyn std::error::Error + Send + Sync + 'a>;
+type RequestResult<'a> = Result<(StatusCode, HashMap<String, String>), BoxedError<'a>>;
+type SubmitResult<'a> = Result<(), BoxedError<'a>>;
 
-async fn send(client: &Client, url: &str, access_key: &str, secret_key: &str) -> RequestResult {
+async fn send<'a>(client: &Client, url: &str, access_key: &str, secret_key: &str) -> RequestResult<'a> {
     let token = format!("LOW {}:{}", access_key, secret_key);
     let mut form = HashMap::new();
 
@@ -30,7 +31,7 @@ async fn send(client: &Client, url: &str, access_key: &str, secret_key: &str) ->
     Ok((status, json))
 }
 
-pub async fn submit(client: &Client, urls: &[String], access_key: &str, secret_key: &str) -> SubmitResult {
+pub async fn submit<'a>(client: &Client, urls: &[String], access_key: &str, secret_key: &str) -> SubmitResult<'a> {
     let count = urls.len();
     let mut queue = VecDeque::from_iter(urls.iter());
     let mut index: usize = 1;

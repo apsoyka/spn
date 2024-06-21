@@ -1,36 +1,24 @@
-mod arguments;
-
+mod config;
 mod network;
+mod panic;
 
-use std::{env, error::Error, path::PathBuf, process::exit};
+use std::{env, path::PathBuf};
 
-use arguments::{Arguments, Verbosity};
-use clap::Parser;
-use log::{debug, error};
+use config::{parse, setup_logging};
+use panic::setup_panic;
+use log::debug;
 use network::submit;
-use tokio::{fs::read_to_string, io::{stdin, AsyncReadExt}};
+use tokio::{fs::read_to_string, io::{stdin, AsyncReadExt}, main};
 
 const API_ACCESS_KEY: &str = "API_ACCESS_KEY";
 const API_SECRET_KEY: &str = "API_SECRET_KEY";
 const API_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
-type ReadResult = Result<Vec<String>, Box<dyn Error + Send + Sync>>;
-type MainResult = Result<(), Box<dyn Error + Send + Sync>>;
+type BoxedError<'a> = Box<dyn std::error::Error + Send + Sync + 'a>;
+type ReadResult<'a> = Result<Vec<String>, BoxedError<'a>>;
+type MainResult<'a> = Result<(), BoxedError<'a>>;
 
-fn setup_logging(verbosity: &Verbosity) {
-    let filter = verbosity.to_filter();
-
-    env_logger::builder()
-        .filter_level(filter)
-        .format_level(true)
-        .format_target(false)
-        .format_module_path(false)
-        .format_timestamp_secs()
-        .parse_default_env()
-        .init();
-}
-
-async fn read(path: Option<PathBuf>) -> ReadResult {
+async fn read<'a>(path: Option<PathBuf>) -> ReadResult<'a> {
     match path {
         Some(path) => {
             let buffer = read_to_string(path).await?;
@@ -55,11 +43,13 @@ async fn read(path: Option<PathBuf>) -> ReadResult {
     }
 }
 
-#[tokio::main]
-async fn main() -> MainResult {
-    let arguments = Arguments::parse();
+#[main]
+async fn main() -> MainResult<'static> {
+    let arguments = parse();
 
-    setup_logging(&arguments.verbosity);
+    setup_panic();
+
+    setup_logging(&arguments.verbosity)?;
 
     let client = reqwest::Client::builder()
         .connection_verbose(true)
@@ -68,26 +58,18 @@ async fn main() -> MainResult {
 
     let urls = read(arguments.input_file).await?;
 
-    if urls.is_empty() {
-        error!("Nothing to do; quitting");
+    if urls.is_empty() { return Err("Nothing to do".into()); }
 
-        exit(1);
-    }
-
-    if dotenv::dotenv().ok() == None {
-        debug!("Failed to load credentials from dotfile");
-    }
+    if dotenv::dotenv().ok() == None { debug!("No dotfile found"); }
 
     let access_key = arguments.credentials.access_key.or(env::var(API_ACCESS_KEY).ok());
     let secret_key = arguments.credentials.secret_key.or(env::var(API_SECRET_KEY).ok());
+    let keys = (access_key, secret_key);
 
-    if access_key.is_none() || secret_key.is_none() {
-        error!("Must provide an access key and secret key");
-
-        exit(1);
-    }
-
-    submit(&client, &urls, &access_key.unwrap(), &secret_key.unwrap()).await?;
+    match keys {
+        (Some(access_key), Some(secret_key)) => submit(&client, &urls, &access_key, &secret_key).await?,
+        _ => panic!("Must provide an access key and a secret key")
+    };
 
     Ok(())
 }
